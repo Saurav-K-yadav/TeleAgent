@@ -128,42 +128,25 @@ class SchedulingIntent(BaseModel):
 # llama.cpp samples tokens that satisfy this grammar at every step.
 
 _SCHEDULING_GRAMMAR = r"""
-root   ::= object
-value  ::= object | array | string | number | bool | null
+root   ::= ws "{" ws "\"intent\"" ws ":" ws intent-val ws "," ws "\"caller_name\"" ws ":" ws str-or-null ws "," ws "\"preferred_date\"" ws ":" ws str-or-null ws "," ws "\"preferred_time\"" ws ":" ws str-or-null ws "," ws "\"duration_minutes\"" ws ":" ws int-or-null ws "," ws "\"participants\"" ws ":" ws str-array ws "," ws "\"meeting_type\"" ws ":" ws meeting-type-val ws "," ws "\"notes\"" ws ":" ws str-or-null ws "," ws "\"confidence\"" ws ":" ws confidence-val ws "," ws "\"missing_fields\"" ws ":" ws str-array ws "}" ws
 
-object ::=
-  "{" ws
-    "\"intent\""         ws ":" ws intent-val        ws ","  ws
-    "\"caller_name\""    ws ":" ws str-or-null        ws ","  ws
-    "\"preferred_date\"" ws ":" ws str-or-null        ws ","  ws
-    "\"preferred_time\"" ws ":" ws str-or-null        ws ","  ws
-    "\"duration_minutes\"" ws ":" ws int-or-null      ws ","  ws
-    "\"participants\""   ws ":" ws str-array          ws ","  ws
-    "\"meeting_type\""   ws ":" ws meeting-type-val   ws ","  ws
-    "\"notes\""          ws ":" ws str-or-null        ws ","  ws
-    "\"confidence\""     ws ":" ws confidence-val     ws ","  ws
-    "\"missing_fields\"" ws ":" ws str-array
-  ws "}"
-
-intent-val ::= "\"book_meeting\"" | "\"reschedule\"" | "\"cancel\"" |
-               "\"check_availability\"" | "\"provide_info\"" |
-               "\"end_call\"" | "\"unclear\""
+intent-val ::= "\"book_meeting\"" | "\"reschedule\"" | "\"cancel\"" | "\"check_availability\"" | "\"provide_info\"" | "\"end_call\"" | "\"unclear\""
 
 meeting-type-val ::= "\"phone\"" | "\"video\"" | "\"in_person\"" | "null"
 
 str-or-null ::= string | "null"
 int-or-null ::= integer | "null"
 
-confidence-val ::= "0" | "1" | ("0" "." [0-9]+) | ("1" "." "0"*)
+confidence-val ::= ("0" | "1") | ("0" "." [0-9]+) | ("1" "." [0]*)
 
 str-array ::= "[" ws "]" | "[" ws string (ws "," ws string)* ws "]"
 
-string ::= "\"" ([^"\\] | "\\" .)* "\""
-integer ::= "-"? [0-9]+
+string ::= "\"" ([^"\\] | "\\\\" ["\\\\/bfnrt] | "\\u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])* "\""
+integer ::= ("-"?) [0-9]+
 number  ::= integer ("." [0-9]+)?
 bool    ::= "true" | "false"
 null    ::= "null"
-array   ::= "[" ws (value (ws "," ws value)*)? ws "]"
+array   ::= "[" ws (number (ws "," ws number)*)? ws "]"
 ws      ::= [ \t\n\r]*
 """
 

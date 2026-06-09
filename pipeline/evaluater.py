@@ -142,6 +142,11 @@ class Evaluator:
             return fast
 
         self._ensure_loaded()
+        
+        # If model failed to load, use fallback result
+        if self._model is None:
+            logger.debug("MiniCPM3 disabled — using fallback result")
+            return self._fallback_result(intent)
 
         prompt = self._build_prompt(intent, utterances, slot_available, slot_conflicts or [])
 
@@ -212,44 +217,55 @@ class Evaluator:
         logger.info(f"Loading MiniCPM3-4B ({MINICPM_MODEL_ID}) on CPU…")
         t0 = time.perf_counter()
 
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            MINICPM_MODEL_ID,
-            trust_remote_code=True,
-        )
-
-        # Try INT4 via bitsandbytes first; fall back to float32
         try:
-            from transformers import BitsAndBytesConfig
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit              = True,
-                bnb_4bit_compute_dtype    = torch.float32,
-                bnb_4bit_use_double_quant = True,
-                bnb_4bit_quant_type       = "nf4",
-            )
-            self._model = AutoModelForCausalLM.from_pretrained(
+            self._tokenizer = AutoTokenizer.from_pretrained(
                 MINICPM_MODEL_ID,
-                quantization_config = bnb_config,
-                trust_remote_code   = True,
-                device_map          = "cpu",
-                low_cpu_mem_usage   = True,
+                trust_remote_code=True,
             )
-            logger.info("MiniCPM3 loaded in INT4 (bitsandbytes NF4)")
 
-        except (ImportError, Exception) as e:
-            logger.warning(f"bitsandbytes INT4 failed ({e}) — loading float32 on CPU")
-            self._model = AutoModelForCausalLM.from_pretrained(
-                MINICPM_MODEL_ID,
-                torch_dtype       = torch.float32,
-                trust_remote_code = True,
-                low_cpu_mem_usage = True,
+            # Try INT4 via bitsandbytes first; fall back to float32
+            try:
+                from transformers import BitsAndBytesConfig
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit              = True,
+                    bnb_4bit_compute_dtype    = torch.float32,
+                    bnb_4bit_use_double_quant = True,
+                    bnb_4bit_quant_type       = "nf4",
+                )
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    MINICPM_MODEL_ID,
+                    quantization_config = bnb_config,
+                    trust_remote_code   = True,
+                    device_map          = "cpu",
+                    low_cpu_mem_usage   = True,
+                )
+                logger.info("MiniCPM3 loaded in INT4 (bitsandbytes NF4)")
+
+            except (ImportError, Exception) as e:
+                logger.warning(f"bitsandbytes INT4 failed ({e}) — loading float32 on CPU")
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    MINICPM_MODEL_ID,
+                    torch_dtype       = torch.float32,
+                    trust_remote_code = True,
+                    low_cpu_mem_usage = True,
+                )
+                self._model.to("cpu")
+
+            self._model.eval()
+
+            elapsed = time.perf_counter() - t0
+            logger.info(f"MiniCPM3 ready in {elapsed:.1f}s")
+            self._loaded = True
+
+        except Exception as e:
+            logger.error(
+                f"MiniCPM3 failed to load: {e}\n"
+                f"MiniCPM3 will be DISABLED. The pipeline will still work for transcription and intent parsing."
             )
-            self._model.to("cpu")
-
-        self._model.eval()
-
-        elapsed = time.perf_counter() - t0
-        logger.info(f"MiniCPM3 ready in {elapsed:.1f}s")
-        self._loaded = True
+            # Mark as loaded but with model=None so evaluate() knows to skip
+            self._loaded = True
+            self._model = None
+            self._tokenizer = None
 
     def _build_prompt(
         self,

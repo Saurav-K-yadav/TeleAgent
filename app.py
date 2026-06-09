@@ -48,6 +48,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress verbose logs from HuggingFace hub
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("transformers.modeling_utils").setLevel(logging.WARNING)
+
 # Initialize database on startup
 init_db()
 

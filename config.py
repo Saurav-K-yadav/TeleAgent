@@ -26,11 +26,9 @@ TRANSCRIBE_LANGUAGE = "en"          # ISO 639-1 — English only for now
 TRANSCRIBE_DEVICE   = "cuda:0"      # falls back to "cpu" automatically in code
 
 # ── Intent Parser: Qwen2.5-7B-Instruct (GGUF via llama-cpp-python) ────────────
-# Download command (run once):
-#   huggingface-cli download Qwen/Qwen2.5-7B-Instruct-GGUF \
-#       --include "qwen2.5-7b-instruct-q4_k_m.gguf" \
-#       --local-dir ./models
-QWEN_GGUF_PATH    = MODELS_DIR / "qwen2.5-7b-instruct-q4_k_m.gguf"
+# Using q3_k_m quantization (3.55 GB, good quality/size tradeoff).
+# Already downloaded and available in ./models/
+QWEN_GGUF_PATH    = MODELS_DIR / "qwen2.5-7b-instruct-q3_k_m.gguf"
 QWEN_N_GPU_LAYERS = 20     # offload 20 transformer layers to GPU (~0.8 GB VRAM)
                            # remaining ~15 layers run on CPU RAM
 QWEN_N_CTX        = 4096   # context window — sufficient for a call transcript

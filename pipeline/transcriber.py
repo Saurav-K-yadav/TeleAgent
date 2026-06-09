@@ -216,17 +216,24 @@ class Transcriber:
           - float16 on CUDA: ~2.2 GB VRAM ← preferred
           - float32 on CPU:  ~8.0 GB RAM  ← fallback
         """
+        import os
         from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
 
         logger.info(f"Loading Cohere Transcribe ({TRANSCRIBE_MODEL_ID})…")
         t0 = time.perf_counter()
 
         token_kwargs = {"token": HF_TOKEN} if HF_TOKEN else {}
+        
+        # After first download, use local cache only to avoid repeated HF hub calls
+        local_only = os.path.exists(
+            os.path.expanduser(f"~/.cache/huggingface/hub/models--{TRANSCRIBE_MODEL_ID.replace('/', '--')}")
+        )
 
         # Processor (tokenizer + feature extractor) — tiny, load first
         self._processor = AutoProcessor.from_pretrained(
             TRANSCRIBE_MODEL_ID,
             trust_remote_code=True,
+            local_files_only=local_only,
             **token_kwargs,
         )
 
@@ -251,6 +258,7 @@ class Transcriber:
             trust_remote_code = True,
             torch_dtype       = dtype,
             low_cpu_mem_usage = True,   # stream weights instead of double-buffering
+            local_files_only  = local_only,
             **token_kwargs,
         ).to(self._device)
 

@@ -1,6 +1,6 @@
 # ── Core ML / inference ───────────────────────────────────────────────────────
-torch==2.3.1
-torchaudio==2.3.1
+torch>=2.4.0
+torchaudio>=2.4.0
 transformers>=4.56,<5.3,!=5.0.*,!=5.1.*   # Cohere Transcribe requirement (exact)
 accelerate>=0.30.0
 bitsandbytes>=0.43.0                       # 4-bit quant for MiniCPM on CPU
@@ -21,10 +21,10 @@ huggingface_hub
 llama-cpp-python>=0.2.85     # plain CPU fallback — override with CUDA build above
 
 # ── VAD ───────────────────────────────────────────────────────────────────────
+numpy>=1.24.0                # Install early to avoid dependency conflicts
 silero-vad                   # pulls torch; also needs torchaudio for audio I/O
 onnxruntime>=1.16.0          # ONNX runtime for Silero VAD
 pyaudio                      # microphone access (Linux: apt install python3-pyaudio)
-numpy>=1.24.0
 
 # ── Gradio UI ─────────────────────────────────────────────────────────────────
 gradio>=4.40.0
