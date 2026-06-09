@@ -1,0 +1,34 @@
+# ── Core ML / inference ───────────────────────────────────────────────────────
+torch==2.3.1
+torchaudio==2.3.1
+transformers>=4.56,<5.3,!=5.0.*,!=5.1.*   # Cohere Transcribe requirement (exact)
+accelerate>=0.30.0
+bitsandbytes>=0.43.0                       # 4-bit quant for MiniCPM on CPU
+sentencepiece
+protobuf
+
+# ── Cohere Transcribe ASR ─────────────────────────────────────────────────────
+soundfile
+librosa
+huggingface_hub
+
+# ── Qwen2.5 intent parser (llama-cpp-python with CUDA offload) ────────────────
+# Install with CUDA support — do NOT use the plain pip version.
+# Run this separately after pip install -r requirements.txt:
+#   CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --no-cache-dir
+# Windows (MSVC):
+#   set CMAKE_ARGS=-DGGML_CUDA=on && pip install llama-cpp-python --no-cache-dir
+llama-cpp-python>=0.2.85     # plain CPU fallback — override with CUDA build above
+
+# ── VAD ───────────────────────────────────────────────────────────────────────
+silero-vad                   # pulls torch; also needs torchaudio for audio I/O
+onnxruntime>=1.16.0          # ONNX runtime for Silero VAD
+pyaudio                      # microphone access (Linux: apt install python3-pyaudio)
+numpy>=1.24.0
+
+# ── Gradio UI ─────────────────────────────────────────────────────────────────
+gradio>=4.40.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv                # optional: load HF_TOKEN from .env file
+pydantic>=2.0                # JSON schema validation for Qwen output
