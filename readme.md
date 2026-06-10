@@ -5,7 +5,7 @@ TeeleAgentHF is an AI-powered telecalling agent built for a Hugging Face competi
 ## Key Features
 
 - Real-time microphone capture with Gradio UI
-- ASR: Cohere Transcribe (streaming)
+- ASR: Hugging Face Moonshine (streaming)
 - Intent parsing: Qwen2.5-7B-Instruct (GGUF via llama-cpp-python)
 - Evaluation: MiniCPM3-4B (int4 quantized evaluator)
 - VAD: Silero VAD (ONNX)

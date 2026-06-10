@@ -13,7 +13,7 @@ chunks.  This module wraps that stream in a stateful VADListener that:
   3. On silence-end event, flushes the complete utterance into a
      thread-safe queue as a (sample_rate, np.ndarray) tuple.
   4. The orchestrator reads from that queue and passes each utterance
-     to Cohere Transcribe.
+     to Moonshine ASR.
 
 Because Gradio's streaming callback fires on the main thread, all VAD
 processing is synchronous and cheap (< 1 ms per 250 ms chunk on CPU).
@@ -112,7 +112,7 @@ class VADListener:
         Yields
         ------
         (VAD_SAMPLE_RATE, np.ndarray[float32])
-            Complete utterance, ready to be passed to Cohere Transcribe.
+            Complete utterance, ready to be passed to Moonshine ASR.
         """
         if audio is None or len(audio) == 0:
             return

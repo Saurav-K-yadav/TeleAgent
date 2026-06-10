@@ -5,7 +5,7 @@ Orchestrator for the telecalling agent pipeline.
 
 Coordinates the end-to-end flow:
   1. VAD listener        → detects speech boundaries
-  2. Transcriber         → audio-to-text (Cohere)
+  2. Transcriber         → audio-to-text (Moonshine)
   3. Intent parser       → structured intent extraction (Qwen2.5)
   4. Evaluator           → scheduling decision + spoken response (MiniCPM3)
   5. Database updates    → persist call state

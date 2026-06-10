@@ -5,7 +5,7 @@ Qwen2.5-7B-Instruct (Q4_K_M GGUF) intent & entity extractor.
 
 Responsibilities
 ────────────────
-Takes a raw transcript string from Cohere Transcribe and returns a
+Takes a raw transcript string from Moonshine ASR and returns a
 validated SchedulingIntent object — structured data the evaluator and
 DB layer can act on directly.
 
@@ -198,7 +198,7 @@ class IntentParser:
         Parameters
         ----------
         transcript : str
-            Raw text from Cohere Transcribe (one or more utterances joined).
+            Raw text from Moonshine ASR (one or more utterances joined).
 
         Returns
         -------

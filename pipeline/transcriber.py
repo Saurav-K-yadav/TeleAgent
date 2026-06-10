@@ -1,53 +1,28 @@
 """
 pipeline/transcriber.py
 
-Cohere Transcribe wrapper for the telecalling agent.
+Hugging Face Moonshine ASR wrapper for the telecalling agent.
 
-Model
-─────
-CohereLabs/cohere-transcribe-03-2026
-  - 2B parameter Conformer encoder + lightweight Transformer decoder
-  - Audio-in, text-out ASR, Apache 2.0
-  - Gated: requires HF_TOKEN with accepted licence at
-    https://huggingface.co/CohereLabs/cohere-transcribe-03-2026
+The public API intentionally matches the previous ASR wrapper:
 
-Memory budget on RTX 2050 (4 GB VRAM)
-──────────────────────────────────────
-  Full fp32  →  ~8 GB   ✗
-  float16    →  ~4 GB   ✗ (tight, unstable with other allocations)
-  torch_dtype=torch.float16 + device_map keeps ~2.2 GB → ✓
+    transcriber = Transcriber()
+    text = transcriber.transcribe(sample_rate, audio_np)
 
-Design decisions
-────────────────
-  - Lazy-loaded: model is not pulled from HF until the first call arrives.
-    This keeps Gradio startup fast and avoids OOM if the user never speaks.
-  - GPU-first with automatic CPU fallback: if CUDA is unavailable or VRAM
-    is insufficient the model moves to CPU transparently.
-  - Uses model.transcribe(audio_arrays=...) to avoid disk I/O entirely.
-  - compile=False by default: torch.compile causes a 30-60 s warmup on
-    first call which would break the live-call UX. Set compile=True only
-    in batch / offline mode.
-  - Thread-safe: model loading is protected by a threading.Lock so
-    concurrent Gradio sessions don't race to download.
-
-Usage
-─────
-    transcriber = Transcriber()                 # cheap — model not loaded yet
-    text = transcriber.transcribe(sr, audio_np) # loads model on first call
-    transcriber.unload()                        # free VRAM between sessions
+Internally this uses UsefulSensors/moonshine-tiny through Transformers:
+AutoFeatureExtractor prepares audio features, AutoTokenizer decodes generated
+tokens, and MoonshineForConditionalGeneration generates transcripts in memory.
 """
 
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
 
 from config import (
     TRANSCRIBE_MODEL_ID,
-    TRANSCRIBE_LANGUAGE,
     TRANSCRIBE_DEVICE,
     HF_TOKEN,
 )
@@ -57,19 +32,23 @@ logger = logging.getLogger(__name__)
 
 class Transcriber:
     """
-    Lazy-loading wrapper around CohereLabs/cohere-transcribe-03-2026.
+    Lazy-loading wrapper around UsefulSensors/moonshine-tiny.
 
     Thread-safe: a single instance can be shared across the whole app.
     """
 
-    def __init__(self):
-        self._model     = None
-        self._processor = None
-        self._device    = None
-        self._lock      = threading.Lock()
-        self._loaded    = False
+    # Recommended by the Moonshine model card to reduce hallucination loops.
+    _MAX_TOKENS_PER_SECOND = 6.5
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    def __init__(self):
+        self._model = None
+        self._feature_extractor = None
+        self._tokenizer = None
+        self._device = None
+        self._dtype = None
+        self._sample_rate = None
+        self._lock = threading.Lock()
+        self._loaded = False
 
     def transcribe(self, sample_rate: int, audio: np.ndarray) -> str:
         """
@@ -78,7 +57,7 @@ class Transcriber:
         Parameters
         ----------
         sample_rate : int
-            Sample rate of `audio` (typically 16000 from VAD).
+            Sample rate of `audio`.
         audio : np.ndarray
             Mono float32 PCM in [-1.0, 1.0].
 
@@ -99,26 +78,14 @@ class Transcriber:
 
         try:
             t0 = time.perf_counter()
-
-            results = self._model.transcribe(
-                processor       = self._processor,
-                audio_arrays    = [audio],        # list of np.ndarray
-                sample_rates    = [sample_rate],  # matching list of ints
-                language        = TRANSCRIBE_LANGUAGE,
-                punctuation     = True,
-                batch_size      = 1,              # one utterance at a time (live)
-                compile         = False,          # no warmup delay in live mode
-                pipeline_detokenization = False,  # not needed for batch_size=1
-            )
-
+            text = self._generate_text([audio], [sample_rate])[0]
             elapsed = time.perf_counter() - t0
-            text    = results[0].strip() if results else ""
 
             duration = len(audio) / sample_rate
-            rtfx     = duration / elapsed if elapsed > 0 else 0
+            rtfx = duration / elapsed if elapsed > 0 else 0
             logger.info(
                 f"Transcribed {duration:.2f}s audio in {elapsed:.2f}s "
-                f"(RTFx {rtfx:.1f}x): '{text[:80]}{'…' if len(text)>80 else ''}'"
+                f"(RTFx {rtfx:.1f}x): '{text[:80]}{'...' if len(text) > 80 else ''}'"
             )
             return text
 
@@ -130,8 +97,7 @@ class Transcriber:
         self, utterances: list[tuple[int, np.ndarray]]
     ) -> list[str]:
         """
-        Transcribe multiple utterances in one forward pass.
-        More efficient for post-call batch processing.
+        Transcribe multiple utterances in one generation call.
 
         Parameters
         ----------
@@ -139,54 +105,47 @@ class Transcriber:
 
         Returns
         -------
-        list of str — one entry per input, "" on individual errors
+        list of str, one entry per input, "" on individual errors
         """
         if not utterances:
             return []
 
         self._ensure_loaded()
 
-        sample_rates  = [sr  for sr, _  in utterances]
-        audio_arrays  = [self._validate_audio(a) for _, a in utterances]
+        sample_rates = [sr for sr, _ in utterances]
+        audio_arrays = [self._validate_audio(a) for _, a in utterances]
 
-        # Replace any None (invalid) arrays with silent arrays
         audio_arrays = [
             a if a is not None else np.zeros(sample_rates[i], dtype=np.float32)
             for i, a in enumerate(audio_arrays)
         ]
 
         try:
-            results = self._model.transcribe(
-                processor       = self._processor,
-                audio_arrays    = audio_arrays,
-                sample_rates    = sample_rates,
-                language        = TRANSCRIBE_LANGUAGE,
-                punctuation     = True,
-                batch_size      = len(utterances),
-                compile         = False,
-                pipeline_detokenization = True,  # helps with larger batches
-            )
-            return [r.strip() for r in results]
-
+            return self._generate_text(audio_arrays, sample_rates)
         except Exception as exc:
             logger.error(f"Batch transcription failed: {exc}", exc_info=True)
             return [""] * len(utterances)
 
     def unload(self):
         """
-        Release GPU memory.  Call at end of a call session if memory is tight.
+        Release GPU memory. Call at end of a call session if memory is tight.
         Model will be reloaded lazily on the next call.
         """
         with self._lock:
             if self._loaded:
                 del self._model
-                del self._processor
-                self._model     = None
-                self._processor = None
-                self._loaded    = False
+                del self._feature_extractor
+                del self._tokenizer
+                self._model = None
+                self._feature_extractor = None
+                self._tokenizer = None
+                self._device = None
+                self._dtype = None
+                self._sample_rate = None
+                self._loaded = False
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                logger.info("Transcriber unloaded — VRAM freed.")
+                logger.info("Moonshine transcriber unloaded; VRAM freed.")
 
     @property
     def is_loaded(self) -> bool:
@@ -196,117 +155,215 @@ class Transcriber:
     def device(self) -> Optional[str]:
         return str(self._device) if self._device else None
 
-    # ── Internal ──────────────────────────────────────────────────────────────
-
     def _ensure_loaded(self):
         """Load model + processor exactly once, thread-safely."""
         if self._loaded:
             return
 
         with self._lock:
-            if self._loaded:   # double-checked locking
+            if self._loaded:
                 return
             self._load()
 
     def _load(self):
-        """
-        Pull model from HuggingFace and move to best available device.
-
-        Device selection for RTX 2050 (4 GB):
-          - float16 on CUDA: ~2.2 GB VRAM ← preferred
-          - float32 on CPU:  ~8.0 GB RAM  ← fallback
-        """
+        """Pull Moonshine from Hugging Face and move it to the best device."""
         import os
-        from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
 
-        logger.info(f"Loading Cohere Transcribe ({TRANSCRIBE_MODEL_ID})…")
+        from transformers import AutoFeatureExtractor, AutoTokenizer
+
+        self._install_torchvision_import_stub_if_needed()
+        from transformers import MoonshineForConditionalGeneration
+
+        logger.info(f"Loading Moonshine ASR ({TRANSCRIBE_MODEL_ID})...")
         t0 = time.perf_counter()
 
         token_kwargs = {"token": HF_TOKEN} if HF_TOKEN else {}
-        
-        # After first download, use local cache only to avoid repeated HF hub calls
         local_only = os.path.exists(
-            os.path.expanduser(f"~/.cache/huggingface/hub/models--{TRANSCRIBE_MODEL_ID.replace('/', '--')}")
+            os.path.expanduser(
+                f"~/.cache/huggingface/hub/models--{TRANSCRIBE_MODEL_ID.replace('/', '--')}"
+            )
         )
 
-        # Processor (tokenizer + feature extractor) — tiny, load first
-        self._processor = AutoProcessor.from_pretrained(
+        self._feature_extractor = AutoFeatureExtractor.from_pretrained(
             TRANSCRIBE_MODEL_ID,
-            trust_remote_code=True,
             local_files_only=local_only,
             **token_kwargs,
         )
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            TRANSCRIBE_MODEL_ID,
+            local_files_only=local_only,
+            **token_kwargs,
+        )
+        self._sample_rate = int(self._feature_extractor.sampling_rate)
 
-        # Determine device & dtype
         if torch.cuda.is_available():
             try:
                 self._device = torch.device(TRANSCRIBE_DEVICE)
-                dtype        = torch.float16
-                logger.info(f"CUDA available — loading in float16 on {self._device}")
+                self._dtype = torch.float16
+                logger.info(f"CUDA available; loading Moonshine in float16 on {self._device}")
             except Exception:
                 self._device = torch.device("cpu")
-                dtype        = torch.float32
-                logger.warning("CUDA device init failed — falling back to CPU float32")
+                self._dtype = torch.float32
+                logger.warning("CUDA device init failed; falling back to CPU float32")
         else:
             self._device = torch.device("cpu")
-            dtype        = torch.float32
-            logger.info("No CUDA — loading on CPU in float32 (will be slower)")
+            self._dtype = torch.float32
+            logger.info("No CUDA; loading Moonshine on CPU in float32")
 
-        # Model weights
-        self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        self._model = MoonshineForConditionalGeneration.from_pretrained(
             TRANSCRIBE_MODEL_ID,
-            trust_remote_code = True,
-            torch_dtype       = dtype,
-            low_cpu_mem_usage = True,   # stream weights instead of double-buffering
-            local_files_only  = local_only,
+            torch_dtype=self._dtype,
+            low_cpu_mem_usage=True,
+            local_files_only=local_only,
             **token_kwargs,
         ).to(self._device)
-
         self._model.eval()
 
         elapsed = time.perf_counter() - t0
         logger.info(
-            f"Cohere Transcribe ready on {self._device} "
-            f"(dtype={dtype}, loaded in {elapsed:.1f}s)"
+            f"Moonshine ASR ready on {self._device} "
+            f"(dtype={self._dtype}, sample_rate={self._sample_rate}, loaded in {elapsed:.1f}s)"
         )
 
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and self._device.type == "cuda":
             allocated = torch.cuda.memory_allocated(self._device) / 1024**3
-            reserved  = torch.cuda.memory_reserved(self._device)  / 1024**3
+            reserved = torch.cuda.memory_reserved(self._device) / 1024**3
             logger.info(
-                f"VRAM after load — allocated: {allocated:.2f} GB, "
-                f"reserved: {reserved:.2f} GB"
+                f"VRAM after load: allocated={allocated:.2f} GB, reserved={reserved:.2f} GB"
             )
 
         self._loaded = True
 
+    def _generate_text(
+        self,
+        audio_arrays: Sequence[np.ndarray],
+        sample_rates: Sequence[int],
+    ) -> list[str]:
+        """Run Moonshine generation and decode transcripts."""
+        prepared = [
+            self._resample(audio, sr, self._sample_rate)
+            for audio, sr in zip(audio_arrays, sample_rates)
+        ]
+
+        inputs = self._feature_extractor(
+            prepared,
+            return_tensors="pt",
+            sampling_rate=self._sample_rate,
+            padding=True,
+        )
+        inputs = inputs.to(self._device, self._dtype)
+
+        with torch.inference_mode():
+            seq_lens = inputs.attention_mask.sum(dim=-1)
+            token_limit_factor = self._MAX_TOKENS_PER_SECOND / self._sample_rate
+            max_length = max(1, int((seq_lens * token_limit_factor).max().item()))
+            generated_ids = self._model.generate(**inputs, max_length=max_length)
+
+        return [
+            self._tokenizer.decode(ids, skip_special_tokens=True).strip()
+            for ids in generated_ids
+        ]
+
+    @staticmethod
+    def _install_torchvision_import_stub_if_needed() -> None:
+        """
+        Keep audio-only Moonshine usable when torchvision is installed but broken.
+
+        Transformers 5.x imports generic image/video utilities while importing
+        modeling classes. A mismatched torchvision wheel can raise before any ASR
+        code runs, even though Moonshine does not use torchvision at inference.
+        """
+        try:
+            import torchvision  # noqa: F401
+            return
+        except Exception:
+            pass
+
+        import importlib.machinery
+        import sys
+        import types
+
+        for name in (
+            "torchvision",
+            "torchvision.transforms",
+            "torchvision.transforms.v2",
+            "torchvision.transforms.v2.functional",
+            "torchvision.io",
+        ):
+            sys.modules.pop(name, None)
+
+        torchvision = types.ModuleType("torchvision")
+        torchvision.__spec__ = importlib.machinery.ModuleSpec("torchvision", None)
+        transforms = types.ModuleType("torchvision.transforms")
+        transforms.__spec__ = importlib.machinery.ModuleSpec("torchvision.transforms", None)
+        transforms_v2 = types.ModuleType("torchvision.transforms.v2")
+        transforms_v2.__spec__ = importlib.machinery.ModuleSpec(
+            "torchvision.transforms.v2", None
+        )
+        transforms_v2_functional = types.ModuleType("torchvision.transforms.v2.functional")
+        transforms_v2_functional.__spec__ = importlib.machinery.ModuleSpec(
+            "torchvision.transforms.v2.functional", None
+        )
+        torchvision_io = types.ModuleType("torchvision.io")
+        torchvision_io.__spec__ = importlib.machinery.ModuleSpec("torchvision.io", None)
+
+        class InterpolationMode:
+            NEAREST = 0
+            NEAREST_EXACT = 0
+            BILINEAR = 2
+            BICUBIC = 3
+            BOX = 4
+            HAMMING = 5
+            LANCZOS = 1
+
+        transforms.InterpolationMode = InterpolationMode
+        transforms.v2 = transforms_v2
+        transforms_v2.functional = transforms_v2_functional
+        torchvision.transforms = transforms
+        torchvision.io = torchvision_io
+
+        sys.modules["torchvision"] = torchvision
+        sys.modules["torchvision.transforms"] = transforms
+        sys.modules["torchvision.transforms.v2"] = transforms_v2
+        sys.modules["torchvision.transforms.v2.functional"] = transforms_v2_functional
+        sys.modules["torchvision.io"] = torchvision_io
+
     @staticmethod
     def _validate_audio(audio: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Ensure audio is mono float32.  Returns None if unusable.
-        """
+        """Ensure audio is mono float32 in [-1.0, 1.0]."""
         if audio is None or len(audio) == 0:
             return None
 
         audio = np.array(audio, dtype=np.float32)
 
-        # Stereo → mono
         if audio.ndim == 2:
             audio = audio.mean(axis=1)
         elif audio.ndim != 1:
-            logger.warning(f"Unexpected audio shape {audio.shape} — skipping")
+            logger.warning(f"Unexpected audio shape {audio.shape}; skipping")
             return None
 
-        # Normalise int16-range inputs
         if audio.max() > 1.0 or audio.min() < -1.0:
             audio = audio / 32768.0
 
-        audio = np.clip(audio, -1.0, 1.0)
-        return audio
+        return np.clip(audio, -1.0, 1.0)
+
+    @staticmethod
+    def _resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+        """Simple linear interpolation resample for occasional sample-rate mismatch."""
+        if orig_sr == target_sr:
+            return audio.astype(np.float32, copy=False)
+        if len(audio) == 0:
+            return audio.astype(np.float32)
+
+        ratio = target_sr / orig_sr
+        new_length = max(1, int(len(audio) * ratio))
+        return np.interp(
+            np.linspace(0, len(audio) - 1, new_length),
+            np.arange(len(audio)),
+            audio,
+        ).astype(np.float32)
 
 
-# ── Module-level singleton ─────────────────────────────────────────────────────
-# Shared across the whole app — model loaded once, reused every utterance.
 _transcriber: Optional[Transcriber] = None
 
 
@@ -318,58 +375,44 @@ def get_transcriber() -> Transcriber:
     return _transcriber
 
 
-# ── Offline smoke test (no HF token needed) ───────────────────────────────────
-
 def _smoke_test_offline():
-    """
-    Validates the audio pre-processing path without loading the model.
-    Full model load requires a HF token + accepted Cohere licence.
-    """
+    """Validate audio preprocessing and singleton behavior without loading the model."""
     import math
+
     logging.basicConfig(level=logging.INFO)
-    logger.info("Running offline smoke test (pre-processing only)…")
+    logger.info("Running offline smoke test (pre-processing only)...")
 
-    SR = 16000
+    sr = 16000
 
-    # 1. Stereo int16 → mono float32
-    stereo_int16 = (np.random.randn(SR, 2) * 32767).astype(np.int16)
+    stereo_int16 = (np.random.randn(sr, 2) * 32767).astype(np.int16)
     result = Transcriber._validate_audio(stereo_int16)
     assert result is not None
-    assert result.ndim   == 1,        f"Expected mono, got shape {result.shape}"
-    assert result.dtype  == np.float32
-    assert result.max()  <= 1.0
-    assert result.min()  >= -1.0
-    logger.info("  ✓ Stereo int16 → mono float32 normalisation")
+    assert result.ndim == 1, f"Expected mono, got shape {result.shape}"
+    assert result.dtype == np.float32
+    assert result.max() <= 1.0
+    assert result.min() >= -1.0
+    logger.info("Stereo int16 to mono float32 normalization")
 
-    # 2. Already mono float32 — passthrough
-    mono_float = np.sin(2 * math.pi * 440 * np.linspace(0, 1, SR)).astype(np.float32)
+    mono_float = np.sin(2 * math.pi * 440 * np.linspace(0, 1, sr)).astype(np.float32)
     result = Transcriber._validate_audio(mono_float)
-    assert result is not None and result.shape == (SR,)
-    logger.info("  ✓ Mono float32 passthrough")
+    assert result is not None and result.shape == (sr,)
+    logger.info("Mono float32 passthrough")
 
-    # 3. Empty input → None
     result = Transcriber._validate_audio(np.array([]))
     assert result is None
-    logger.info("  ✓ Empty input → None")
+    logger.info("Empty input returns None")
 
-    # 4. Singleton pattern
     t1 = get_transcriber()
     t2 = get_transcriber()
     assert t1 is t2
-    logger.info("  ✓ Module singleton")
+    logger.info("Module singleton")
 
-    logger.info("\nOffline smoke test PASSED ✓")
+    logger.info("Offline smoke test PASSED")
     logger.info(
-        "\nTo run the full model test (requires HF_TOKEN + accepted licence):\n"
-        "  export HF_TOKEN=hf_...\n"
-        "  PYTHONPATH=. python3 -c \"\n"
-        "  from pipeline.transcriber import get_transcriber\n"
-        "  import numpy as np\n"
-        "  t = get_transcriber()\n"
-        "  # 2s of 440 Hz tone — expect near-empty transcription\n"
-        "  audio = np.sin(2*3.14*440*np.linspace(0,2,32000)).astype('float32')\n"
-        "  print(repr(t.transcribe(16000, audio)))\n"
-        "  \""
+        "\nTo run the full model test:\n"
+        "  python -c \"from pipeline.transcriber import get_transcriber; "
+        "import numpy as np; t=get_transcriber(); "
+        "audio=np.zeros(16000,dtype='float32'); print(repr(t.transcribe(16000,audio)))\""
     )
 
 

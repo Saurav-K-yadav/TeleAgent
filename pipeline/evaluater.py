@@ -18,7 +18,7 @@ Memory strategy for RTX 2050
 ─────────────────────────────
 MiniCPM3-4B runs AFTER the transcriber finishes each utterance.
 They never overlap. MiniCPM3 loads in 4-bit (INT4) via bitsandbytes
-on CPU — no VRAM needed — freeing the full 4 GB for Cohere Transcribe.
+on CPU, freeing the full 4 GB budget for Moonshine ASR.
 
 If bitsandbytes is unavailable (e.g. first-time setup) we fall back to
 plain float32 on CPU. Slower but always works.
