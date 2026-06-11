@@ -17,9 +17,7 @@ COPY . /app/
 
 # Install dependencies
 RUN pip install --upgrade pip setuptools wheel
-# Install llama-cpp-python without GPU support (CPU-only)
-RUN pip install --no-cache-dir llama-cpp-python --no-build-isolation
-# Install remaining requirements
+# Install remaining requirements (llama-cpp-python will be installed via requirements.txt)
 RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 7860
