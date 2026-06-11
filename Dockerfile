@@ -4,9 +4,6 @@ WORKDIR /app
 
 # System dependencies (CPU-only, no CUDA)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    cmake \
-    git \
     pkg-config \
     libsndfile1 \
     portaudio19-dev \
