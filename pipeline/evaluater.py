@@ -38,7 +38,10 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-import torch
+try:
+    import torch
+except ImportError:  # pragma: no cover
+    torch = None
 
 from config import (
     MINICPM_MODEL_ID,
@@ -212,7 +215,17 @@ class Evaluator:
             self._load()
 
     def _load(self):
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+        try:
+            from transformers import AutoTokenizer, AutoModelForCausalLM
+        except ImportError as e:
+            logger.error(
+                f"Transformers not available: {e}\n"
+                "Evaluator will remain disabled until the environment includes transformers."
+            )
+            self._loaded = True
+            self._model = None
+            self._tokenizer = None
+            return
 
         logger.info(f"Loading MiniCPM3-4B ({MINICPM_MODEL_ID}) on CPU…")
         t0 = time.perf_counter()
@@ -226,6 +239,9 @@ class Evaluator:
             # Try INT4 via bitsandbytes first; fall back to float32
             try:
                 from transformers import BitsAndBytesConfig
+                if torch is None:
+                    raise ImportError("torch is not installed")
+
                 bnb_config = BitsAndBytesConfig(
                     load_in_4bit              = True,
                     bnb_4bit_compute_dtype    = torch.float32,
@@ -245,11 +261,11 @@ class Evaluator:
                 logger.warning(f"bitsandbytes INT4 failed ({e}) — loading float32 on CPU")
                 self._model = AutoModelForCausalLM.from_pretrained(
                     MINICPM_MODEL_ID,
-                    torch_dtype       = torch.float32,
                     trust_remote_code = True,
                     low_cpu_mem_usage = True,
                 )
-                self._model.to("cpu")
+                if torch is not None:
+                    self._model.to("cpu")
 
             self._model.eval()
 

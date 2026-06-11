@@ -13,13 +13,23 @@ AutoFeatureExtractor prepares audio features, AutoTokenizer decodes generated
 tokens, and MoonshineForConditionalGeneration generates transcripts in memory.
 """
 
+import io
 import logging
 import threading
 import time
 from typing import Optional, Sequence
 
 import numpy as np
-import torch
+
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    torch = None
+    _TORCH_AVAILABLE = False
+
+import soundfile as sf
+from huggingface_hub import InferenceApi
 
 from config import (
     TRANSCRIBE_MODEL_ID,
@@ -49,6 +59,7 @@ class Transcriber:
         self._sample_rate = None
         self._lock = threading.Lock()
         self._loaded = False
+        self._use_remote = False
 
     def transcribe(self, sample_rate: int, audio: np.ndarray) -> str:
         """
@@ -133,9 +144,6 @@ class Transcriber:
         """
         with self._lock:
             if self._loaded:
-                del self._model
-                del self._feature_extractor
-                del self._tokenizer
                 self._model = None
                 self._feature_extractor = None
                 self._tokenizer = None
@@ -143,7 +151,7 @@ class Transcriber:
                 self._dtype = None
                 self._sample_rate = None
                 self._loaded = False
-                if torch.cuda.is_available():
+                if _TORCH_AVAILABLE and torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 logger.info("Moonshine transcriber unloaded; VRAM freed.")
 
@@ -162,6 +170,14 @@ class Transcriber:
 
         with self._lock:
             if self._loaded:
+                return
+            if not _TORCH_AVAILABLE:
+                logger.warning(
+                    "PyTorch is unavailable in this environment; "
+                    "using remote ASR fallback."
+                )
+                self._use_remote = True
+                self._loaded = True
                 return
             self._load()
 
@@ -240,6 +256,9 @@ class Transcriber:
         sample_rates: Sequence[int],
     ) -> list[str]:
         """Run Moonshine generation and decode transcripts."""
+        if self._use_remote:
+            return [self._remote_transcribe(audio, sr) for audio, sr in zip(audio_arrays, sample_rates)]
+
         prepared = [
             self._resample(audio, sr, self._sample_rate)
             for audio, sr in zip(audio_arrays, sample_rates)
@@ -263,6 +282,25 @@ class Transcriber:
             self._tokenizer.decode(ids, skip_special_tokens=True).strip()
             for ids in generated_ids
         ]
+
+    def _remote_transcribe(self, audio: np.ndarray, sample_rate: int) -> str:
+        """Use the Hugging Face Inference API to transcribe audio if local Torch is unavailable."""
+        if not HF_TOKEN:
+            logger.warning("HF_TOKEN is not set; falling back to mock transcription.")
+            return ""
+
+        try:
+            client = InferenceApi(repo_id="openai/whisper-small", token=HF_TOKEN)
+            with io.BytesIO() as buffer:
+                sf.write(buffer, audio, samplerate=sample_rate, format="WAV")
+                buffer.seek(0)
+                response = client(inputs=buffer)
+            if isinstance(response, dict) and "text" in response:
+                return response["text"].strip()
+            return str(response)
+        except Exception as exc:
+            logger.error(f"Remote transcription failed: {exc}", exc_info=True)
+            return ""
 
     @staticmethod
     def _install_torchvision_import_stub_if_needed() -> None:

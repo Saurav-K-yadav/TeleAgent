@@ -34,12 +34,18 @@ Usage
 
 import logging
 import queue
+import time
 from typing import Generator, Optional, Tuple
 
 import numpy as np
-import torch
 
-from silero_vad import VADIterator, load_silero_vad
+try:
+    import torch
+    from silero_vad import VADIterator, load_silero_vad
+    _SILERO_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    torch = None
+    _SILERO_AVAILABLE = False
 
 from config import (
     VAD_SAMPLE_RATE,
@@ -48,6 +54,14 @@ from config import (
     VAD_SILENCE_DURATION_S,
     VAD_MIN_SPEECH_S,
 )
+
+if not _SILERO_AVAILABLE:
+    class VADListener:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "Silero VAD is unavailable. Install torch and silero-vad "
+                "or use the MockVADListener fallback."
+            )
 
 # Silero v6 requires exactly 512-sample windows at 16kHz (32 ms).
 # We still accept larger Gradio chunks and stride through them internally.

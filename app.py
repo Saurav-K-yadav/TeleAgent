@@ -27,6 +27,9 @@ import json
 
 import gradio as gr
 import numpy as np
+from pipeline.transcriber import get_transcriber
+from pipeline.intent_parser import get_intent_parser
+from pipeline.evaluater import get_evaluator
 
 from config import APP_TITLE, APP_DESCRIPTION, SERVER_PORT, SERVER_NAME
 from pipeline.orchestrator import CallSession, PipelineUpdate
@@ -368,6 +371,7 @@ def build_app() -> gr.Blocks:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    logger.info("Starting Gradio app (models load lazily on demand)...")
     app = build_app()
     app.launch(
         server_name = SERVER_NAME,
