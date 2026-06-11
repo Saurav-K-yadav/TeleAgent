@@ -21,3 +21,9 @@ RUN pip install --no-cache-dir --prefer-binary -r requirements-spaces.txt
 EXPOSE 7860
 
 CMD ["python3", "app.py"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    pkg-config \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
