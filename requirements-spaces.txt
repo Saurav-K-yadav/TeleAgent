@@ -7,6 +7,7 @@ pydantic>=2.0
 python-dotenv
 huggingface_hub
 soundfile
+requests
 
 # Optional utilities
 # Keep the core app lightweight and use fallback or remote inference when needed.

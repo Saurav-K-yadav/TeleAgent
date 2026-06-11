@@ -28,8 +28,8 @@ except ImportError:  # pragma: no cover
     torch = None
     _TORCH_AVAILABLE = False
 
+import requests
 import soundfile as sf
-from huggingface_hub import InferenceApi
 
 from config import (
     TRANSCRIBE_MODEL_ID,
@@ -289,15 +289,34 @@ class Transcriber:
             logger.warning("HF_TOKEN is not set; falling back to mock transcription.")
             return ""
 
+        if requests is None:
+            logger.warning(
+                "requests is unavailable; cannot perform remote transcription."
+            )
+            return ""
+
         try:
-            client = InferenceApi(repo_id="openai/whisper-small", token=HF_TOKEN)
+            endpoint = "https://api-inference.huggingface.co/models/openai/whisper-small"
+            headers = {
+                "Authorization": f"Bearer {HF_TOKEN}",
+                "Accept": "application/json",
+            }
+
             with io.BytesIO() as buffer:
                 sf.write(buffer, audio, samplerate=sample_rate, format="WAV")
                 buffer.seek(0)
-                response = client(inputs=buffer)
-            if isinstance(response, dict) and "text" in response:
-                return response["text"].strip()
-            return str(response)
+                response = requests.post(
+                    endpoint,
+                    headers=headers,
+                    data=buffer.read(),
+                    timeout=90,
+                )
+
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict) and "text" in payload:
+                return payload["text"].strip()
+            return str(payload)
         except Exception as exc:
             logger.error(f"Remote transcription failed: {exc}", exc_info=True)
             return ""
