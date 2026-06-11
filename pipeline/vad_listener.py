@@ -45,6 +45,8 @@ try:
     _SILERO_AVAILABLE = True
 except ImportError:  # pragma: no cover
     torch = None
+    VADIterator = None
+    load_silero_vad = None
     _SILERO_AVAILABLE = False
 
 from config import (
@@ -87,6 +89,12 @@ class VADListener:
     """
 
     def __init__(self):
+        if not _SILERO_AVAILABLE or load_silero_vad is None:
+            raise RuntimeError(
+                "Silero VAD is unavailable. Install torch and silero-vad "
+                "or use the MockVADListener fallback."
+            )
+
         logger.info("Loading Silero VAD model (ONNX, CPU)…")
         self._model = load_silero_vad(onnx=True)     # ONNX = no PyTorch GPU mem
 

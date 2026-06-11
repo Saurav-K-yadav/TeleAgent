@@ -144,8 +144,8 @@ class MockVADListener:
 
 try:
     from pipeline.vad_listener import VADListener
-except (ImportError, ModuleNotFoundError) as e:
-    logger.warning(f"VADListener import failed ({e}) — will use MockVADListener")
+except Exception as e:
+    logger.warning(f"VADListener import failed ({type(e).__name__}: {e}) — will use MockVADListener")
     VADListener = MockVADListener
 
 
