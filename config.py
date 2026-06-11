@@ -21,13 +21,13 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "")
 # ASR: Hugging Face Moonshine
 TRANSCRIBE_MODEL_ID = "UsefulSensors/moonshine-tiny"
 TRANSCRIBE_LANGUAGE = "en"          # Moonshine Tiny is English ASR
-TRANSCRIBE_DEVICE = "cuda:0"        # falls back to "cpu" automatically in code
+TRANSCRIBE_DEVICE = "cpu"           # CPU-only for zero-gpu deployment
 
 # Intent Parser: Qwen2.5-7B-Instruct (GGUF via llama-cpp-python)
-# Using q3_k_m quantization (3.55 GB, good quality/size tradeoff).
-# Already downloaded and available in ./models/
-QWEN_GGUF_PATH = MODELS_DIR / "qwen2.5-7b-instruct-q3_k_m.gguf"
-QWEN_N_GPU_LAYERS = 20     # offload 20 transformer layers to GPU (~0.8 GB VRAM)
+# Using q2_k quantization for smaller size on CPU (~2.3 GB).
+# Download from HF Hub on first run if not cached.
+QWEN_GGUF_PATH = MODELS_DIR / "qwen2.5-7b-instruct-q2_k.gguf"
+QWEN_N_GPU_LAYERS = 0      # CPU-only: no GPU layer offloading
 QWEN_N_CTX = 4096          # context window sufficient for a call transcript
 QWEN_MAX_TOKENS = 512      # max tokens for the structured JSON response
 QWEN_TEMPERATURE = 0.1     # near-deterministic for structured output
