@@ -37,6 +37,7 @@ from config import (
     TRANSCRIBE_MODEL_ID,
     TRANSCRIBE_DEVICE,
     HF_TOKEN,
+    TRANSCRIBE_LOCAL_ONLY,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,16 @@ class Transcriber:
         with self._lock:
             if self._loaded:
                 return
+
             if not _TORCH_AVAILABLE:
+                if TRANSCRIBE_LOCAL_ONLY:
+                    logger.warning(
+                        "PyTorch is unavailable and offline-only transcription is enabled; "
+                        "remote ASR is disabled."
+                    )
+                    self._use_remote = False
+                    self._loaded = True
+                    return
                 logger.warning(
                     "PyTorch is unavailable in this environment; "
                     "using remote ASR fallback."
@@ -183,6 +193,7 @@ class Transcriber:
                 self._use_remote = True
                 self._loaded = True
                 return
+
             self._load()
 
     def _load(self):
@@ -198,11 +209,17 @@ class Transcriber:
         t0 = time.perf_counter()
 
         token_kwargs = {"token": HF_TOKEN} if HF_TOKEN else {}
-        local_only = os.path.exists(
-            os.path.expanduser(
-                f"~/.cache/huggingface/hub/models--{TRANSCRIBE_MODEL_ID.replace('/', '--')}"
-            )
+        hf_model_cache = os.path.expanduser(
+            f"~/.cache/huggingface/hub/models--{TRANSCRIBE_MODEL_ID.replace('/', '--')}"
         )
+        local_only = TRANSCRIBE_LOCAL_ONLY or os.path.exists(hf_model_cache)
+
+        if local_only and not os.path.exists(hf_model_cache):
+            logger.error(
+                "Local Moonshine model cache not found; offline-only transcription "
+                "cannot proceed."
+            )
+            raise RuntimeError("Local Moonshine model is not cached locally.")
 
         self._feature_extractor = AutoFeatureExtractor.from_pretrained(
             TRANSCRIBE_MODEL_ID,
@@ -262,6 +279,10 @@ class Transcriber:
         """Run Moonshine generation and decode transcripts."""
         if self._use_remote:
             return [self._remote_transcribe(audio, sr) for audio, sr in zip(audio_arrays, sample_rates)]
+
+        if self._model is None:
+            logger.warning("Local ASR model is unavailable; skipping transcription.")
+            return ["" for _ in audio_arrays]
 
         prepared = [
             self._resample(audio, sr, self._sample_rate)
