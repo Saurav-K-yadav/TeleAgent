@@ -30,6 +30,8 @@ except ImportError:  # pragma: no cover
 
 import requests
 import soundfile as sf
+import socket
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from config import (
     TRANSCRIBE_MODEL_ID,
@@ -60,6 +62,8 @@ class Transcriber:
         self._lock = threading.Lock()
         self._loaded = False
         self._use_remote = False
+        # None = unknown, True = reachable, False = unreachable
+        self._remote_ok: Optional[bool] = None
 
     def transcribe(self, sample_rate: int, audio: np.ndarray) -> str:
         """
@@ -295,8 +299,26 @@ class Transcriber:
             )
             return ""
 
+        # Quick host resolution check: avoid repeated DNS failures
+        endpoint = "https://api-inference.huggingface.co/models/openai/whisper-small"
+        hf_host = "api-inference.huggingface.co"
+
+        if self._remote_ok is False:
+            logger.debug("Remote HF host previously unreachable; skipping remote transcription.")
+            return ""
+
+        if self._remote_ok is None:
+            try:
+                socket.getaddrinfo(hf_host, 443)
+                self._remote_ok = True
+            except Exception:
+                logger.warning(
+                    "Cannot resolve Hugging Face inference host; disabling remote transcription until next restart."
+                )
+                self._remote_ok = False
+                return ""
+
         try:
-            endpoint = "https://api-inference.huggingface.co/models/openai/whisper-small"
             headers = {
                 "Authorization": f"Bearer {HF_TOKEN}",
                 "Accept": "application/json",
@@ -317,6 +339,11 @@ class Transcriber:
             if isinstance(payload, dict) and "text" in payload:
                 return payload["text"].strip()
             return str(payload)
+        except RequestsConnectionError as exc:
+            # Connection errors often indicate network/DNS issues — stop retrying
+            logger.error(f"Remote transcription connection failed: {exc}", exc_info=True)
+            self._remote_ok = False
+            return ""
         except Exception as exc:
             logger.error(f"Remote transcription failed: {exc}", exc_info=True)
             return ""
