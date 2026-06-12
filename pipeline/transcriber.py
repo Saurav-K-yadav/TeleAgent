@@ -196,6 +196,77 @@ class Transcriber:
 
             self._load()
 
+    def prefetch(self) -> None:
+        """Download Moonshine into the local HF cache before first inference."""
+        if TRANSCRIBE_LOCAL_ONLY:
+            logger.info(
+                "TRANSCRIBE_LOCAL_ONLY is enabled; skipping startup prefetch."
+            )
+            return
+
+        import os
+
+        hf_model_cache = os.path.expanduser(
+            f"~/.cache/huggingface/hub/models--{TRANSCRIBE_MODEL_ID.replace('/', '--')}"
+        )
+
+        if os.path.exists(hf_model_cache):
+            logger.info("Moonshine ASR cache already exists; skipping startup prefetch.")
+            return
+
+        logger.info(
+            "Prefetching Moonshine ASR model into the Hugging Face cache..."
+        )
+
+        if not _TORCH_AVAILABLE:
+            try:
+                from huggingface_hub import snapshot_download
+
+                snapshot_download(
+                    repo_id=TRANSCRIBE_MODEL_ID,
+                    use_auth_token=HF_TOKEN or None,
+                    local_files_only=False,
+                    repo_type="model",
+                )
+                logger.info("Moonshine ASR cache download completed.")
+            except Exception as exc:
+                logger.error(
+                    "Failed to prefetch Moonshine model cache without PyTorch: %s",
+                    exc,
+                    exc_info=True,
+                )
+            return
+
+        try:
+            self._install_torchvision_import_stub_if_needed()
+            from transformers import AutoFeatureExtractor, AutoTokenizer
+            from transformers import MoonshineForConditionalGeneration
+
+            token_kwargs = {"token": HF_TOKEN} if HF_TOKEN else {}
+
+            AutoFeatureExtractor.from_pretrained(
+                TRANSCRIBE_MODEL_ID,
+                local_files_only=False,
+                **token_kwargs,
+            )
+            AutoTokenizer.from_pretrained(
+                TRANSCRIBE_MODEL_ID,
+                local_files_only=False,
+                **token_kwargs,
+            )
+            MoonshineForConditionalGeneration.from_pretrained(
+                TRANSCRIBE_MODEL_ID,
+                local_files_only=False,
+                **token_kwargs,
+            )
+            logger.info("Moonshine ASR prefetch completed successfully.")
+        except Exception as exc:
+            logger.error(
+                "Startup prefetch of Moonshine failed: %s",
+                exc,
+                exc_info=True,
+            )
+
     def _load(self):
         """Pull Moonshine from Hugging Face and move it to the best device."""
         import os
@@ -213,6 +284,15 @@ class Transcriber:
             f"~/.cache/huggingface/hub/models--{TRANSCRIBE_MODEL_ID.replace('/', '--')}"
         )
         local_only = TRANSCRIBE_LOCAL_ONLY or os.path.exists(hf_model_cache)
+
+        if TRANSCRIBE_LOCAL_ONLY:
+            logger.info(
+                "Offline-only transcription is enabled; Moonshine must already be cached locally."
+            )
+        elif not os.path.exists(hf_model_cache):
+            logger.info(
+                "Moonshine cache not found locally; downloading from Hugging Face Hub."
+            )
 
         if local_only and not os.path.exists(hf_model_cache):
             logger.error(

@@ -22,7 +22,8 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "")
 TRANSCRIBE_MODEL_ID = "UsefulSensors/moonshine-tiny"
 TRANSCRIBE_LANGUAGE = "en"          # Moonshine Tiny is English ASR
 TRANSCRIBE_DEVICE = "cpu"           # CPU-only for zero-gpu deployment
-TRANSCRIBE_LOCAL_ONLY = os.environ.get("TRANSCRIBE_LOCAL_ONLY", "1").lower() in ("1", "true", "yes")
+TRANSCRIBE_LOCAL_ONLY = os.environ.get("TRANSCRIBE_LOCAL_ONLY", "0").lower() in ("1", "true", "yes")
+# Set TRANSCRIBE_LOCAL_ONLY=1 to require a pre-downloaded Moonshine cache and disable remote Hugging Face Hub downloads.
 
 # Intent Parser: Qwen2.5-7B-Instruct (GGUF via llama-cpp-python)
 # Using q2_k quantization for smaller size on CPU (~2.3 GB).

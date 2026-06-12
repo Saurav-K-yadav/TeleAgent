@@ -54,6 +54,7 @@ TeeleAgentHF is an AI-powered telecalling agent built for a Hugging Face competi
 ## Deployment (Hugging Face Spaces)
 
 - Ensure `app.py` listens on 0.0.0.0:7860 (config.py already uses these defaults)
+- For Moonshine ASR, leave `TRANSCRIBE_LOCAL_ONLY` unset or set it to `0` in the environment so the model can be downloaded automatically on first run.
 - Provide model files or configure download/autoload in `hf_config.json`
 - Verify VRAM budget and use quantized GGUF models to fit resource limits
 

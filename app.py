@@ -371,7 +371,15 @@ def build_app() -> gr.Blocks:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    logger.info("Starting Gradio app (models load lazily on demand)...")
+    logger.info("Starting Gradio app; prefetching deployed ASR model if needed...")
+    try:
+        get_transcriber().prefetch()
+    except Exception as exc:
+        logger.error(
+            "ASR prefetch failed at startup; continuing with lazy loading: %s",
+            exc,
+        )
+
     app = build_app()
     app.launch(
         server_name = SERVER_NAME,
